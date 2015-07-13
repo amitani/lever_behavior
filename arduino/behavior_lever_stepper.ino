@@ -15,6 +15,8 @@ unsigned int PIN_ORIGIN = 9;
 unsigned int PIN_LIMIT = 10;
 
 AccelStepper stepper(4,22,23,24,25);
+unsigned int PIN_STEPPER_ENABLE = 30;
+bool pin_stepper_enable_status=false;
 
 unsigned int PIN_WATER = 28;
 
@@ -32,8 +34,8 @@ enum{
   RESPONSE,
   NFB_DELAY,
   RESET,
-  SLEEP
-} state=SLEEP, next_state=INIT, prev_state=SLEEP;
+  PAUSE
+} state=PAUSE, next_state=PAUSE, prev_state=PAUSE, next_trial_state=PAUSE, state_after_init=PAUSE;
 unsigned long state_start_us;
 
 unsigned long init_timeout_us=5000000;
@@ -71,6 +73,11 @@ struct Hysteretic{
       if(current_loop_us-last_off_us>on_delay_us) current=true;
       if(current_loop_us-last_on_us>off_delay_us) current=false;
     }
+    void reset(bool x=false){
+      current=raw=x;
+      last_on_us=current_loop_us-on_delay_us;
+      last_off_us=current_loop_us-off_delay_us;
+    }
     operator bool(){return current;};
 };
 
@@ -82,8 +89,7 @@ unsigned int lever_position;
 unsigned int trial_count;
 bool hit_reward;  
 
-bool to_sleep=false;
-bool to_start=true;
+bool to_reset=true;
 
 unsigned int limit_position=0; //0:at the origin, 1: max
 unsigned int current_position=0;
@@ -120,6 +126,7 @@ void setup() {
   pinMode(LED_BUILTIN,OUTPUT);digitalWrite(LED_BUILTIN,LOW);
   pinMode(PIN_BITCODE,OUTPUT);digitalWrite(PIN_BITCODE,LOW);
   pinMode(PIN_WATER,OUTPUT);digitalWrite(PIN_WATER,LOW);
+  pinMode(PIN_STEPPER_ENABLE,OUTPUT);digitalWrite(PIN_STEPPER_ENABLE,LOW);
   pinMode(PIN_NFB,INPUT_PULLUP);
   pinMode(PIN_LIMIT,INPUT_PULLUP);
   pinMode(PIN_ORIGIN,INPUT_PULLUP);
@@ -142,17 +149,17 @@ void loop() {
   while (SerialControl.available()){
     char c=(char)SerialControl.read();
     serialBuffer += c;
-    SerialControl.print(c);
+    // SerialControl.print(c);
   }
   while(serialBuffer.indexOf('\n')>=0){
     command=serialBuffer.substring(0,serialBuffer.indexOf('\n'));
     serialBuffer.remove(0,1+serialBuffer.indexOf('\n'));
-    SerialControl.println(command);
-    if(command.startsWith("sleep"))to_sleep=true;
-    if(command.startsWith("resume"))to_sleep=false;
-    if(command.startsWith("start")){to_sleep=false;to_start=true;}
-    if(command.startsWith("water ")){
-      command=command.substring(command.indexOf(' '));
+    SerialControl.print("> "+command+'\n');
+    if(command.startsWith("pause"))next_trial_state=PAUSE;
+    else if(command.startsWith("resume"))next_trial_state=BITCODE;
+    else if(command.startsWith("start")){to_reset=true;next_trial_state=BITCODE;}
+    else if(command.startsWith("water ")){
+      command=command.substring(command.indexOf(' ')+1);
       if(command=="on") water_duration_us=-1;
       else if(command=="off") water_duration_us=0;
       else{
@@ -160,16 +167,25 @@ void loop() {
         water_duration_us=command.toInt()*1000;
       }
       command="";
-    }
-    if(command.startsWith("set ")){
+    }else if(command.startsWith("set ")){
       command.remove(0,1+command.indexOf(' '));
       command=command+' ';
       for(int i=0;i<sizeof(new_params)/sizeof(unsigned long);i++){
         if(command.indexOf(' ')<0) break;
         *(i+(unsigned long*)&new_params)=command.substring(0,command.indexOf(' ')).toInt()*1000;
-        //Serial.println(*(i+(unsigned long*)&new_params));
+        //SerialControl.print(*(i+(unsigned long*)&new_params)); SerialControl.print("\n");
         if(command.indexOf(' ')>=0)command.remove(0,1+command.indexOf(' '));
       }
+    }else if(command.startsWith("lever ")){
+      command=command.substring(command.indexOf(' ')+1);
+      if(command=="reinit"){
+        state_after_init=next_trial_state;
+        next_trial_state=INIT;
+      }else if(command=="off"){
+        digitalWrite(PIN_STEPPER_ENABLE,LOW);pin_stepper_enable_status=false;
+      }else SerialControl.print("! Lever command argument parse error.\n");
+    }else{
+      SerialControl.print("! Command parse error.\n");
     }
   }
   
@@ -179,7 +195,8 @@ void loop() {
   loop_count++;
   while(micros()-current_loop_us>us_in_loop){
     SerialControl.print("S:");
-    SerialControl.println(loop_count&65535);
+    SerialControl.print(loop_count&65535);
+    SerialControl.print("\n");
     current_loop_us+=us_in_loop;
     loop_count++;
   }
@@ -199,24 +216,35 @@ void loop() {
   }
   if(state==INIT){
     if(state!=prev_state){
-      SerialControl.println("Initializing.");
+      SerialControl.print("Initializing.\n");
+      digitalWrite(PIN_STEPPER_ENABLE,HIGH);pin_stepper_enable_status=true;
       stepper.setMaxSpeed(20.0);
       stepper.move(100);
     }
     if(hit&&origin||current_loop_us-state_start_us>init_timeout_us){
-      SerialControl.println("Done.");
+      SerialControl.print("Done.\n");
       stepper.setMaxSpeed(200.0);
       stepper.setCurrentPosition(0);
-      next_state=SLEEP;
+      next_state=next_trial_state=state_after_init;
     }
   }else if(state==BITCODE){
     if(state!=prev_state){
-      hit_reward=false;
-      trial_count++;
+      if(!pin_stepper_enable_status){
+        next_state=INIT;
+        next_trial_state=state_after_init=BITCODE;
+        return;
+      }
+      hit_reward=false;      
+      if(to_reset){
+        trial_count=1;
+        to_reset = false;
+      }else{
+        trial_count++;
+      }
       if(memcmp(&params, &new_params, sizeof(params))!=0){
         params=new_params;
         nfb.off_delay_us=params.nfb_window;
-        SerialControl.println("Updated parameters.");
+        SerialControl.print("Updated parameters.\n");
       }
     }
     int nth_bit=(current_loop_us-state_start_us)/us_per_bitcode;
@@ -230,7 +258,7 @@ void loop() {
       stepper.setMaxSpeed(200.0);
       stepper.moveTo(-1*(long)params.open_steps);
     }
-    if(stepper.distanceToGo()==0){next_state=RESPONSE;}
+    if(stepper.distanceToGo()==0){next_state=RESPONSE;hit.reset();}
   }else if(state==RESPONSE){
     noTone(PIN_BEEP);tone(PIN_BEEP,6000);
     if(hit){
@@ -257,17 +285,16 @@ void loop() {
     }
   }else if(state==RESET){
     if(state!=prev_state){
-      stepper.setMaxSpeed(10.0);
+      stepper.setMaxSpeed(15.0);
       stepper.moveTo(0);  
     }
     if(stepper.distanceToGo()==0){
-      next_state=to_sleep?SLEEP:BITCODE;
-      sprintf(output,"%4d %s",trial_count,hit_reward?"h":"m");
-      SerialControl.println(output);
+      next_state=next_trial_state;
+      sprintf(output,"%4d %s\n",trial_count,hit_reward?"h":"m");
+      SerialControl.print(output);
     }
-  }else if(state==SLEEP){
-    if(!to_sleep){next_state=BITCODE;if(to_start)trial_count=0;}
-    //if(next_state==SLEEP) SerialControl.println(lever_position);
+  }else if(state==PAUSE){
+    next_state=next_trial_state;
   }
   
   // water
@@ -277,8 +304,6 @@ void loop() {
   digitalWrite(PIN_WATER,water?HIGH:LOW);
   digitalWrite(LED_BUILTIN,water?HIGH:LOW);
   digitalWrite(PIN_BITCODE,bitcode?HIGH:LOW);
-  //Serial.println(base_servo_pwm_us-1000);
-
   
   // serial output
   output_buffer.init();
@@ -294,7 +319,6 @@ void loop() {
   output_buffer.add_data(lever_position);
   output_buffer.add_data(lever_position>>8);
   SerialData.write(output_buffer.output_buffer,output_buffer.current_length+1);
-  //if((loop_count&127)==0)SerialControl.println(output_buffer.current_length);
 }
 
 
