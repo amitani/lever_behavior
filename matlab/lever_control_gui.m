@@ -14,9 +14,14 @@ function lever_control_gui
         parameters.behavior.water_nfb_off=0;
         parameters.behavior.motor_steps=uint8(5);
         
-        parameters.serial.control_port = 'COM5';
+        if(isunix())
+            parameters.serial.control_port = '/dev/tty.usbmodem1411';
+            parameters.serial.data_port = '/dev/tty.usbserial';
+        else
+            parameters.serial.control_port = 'COM5';
+            parameters.serial.data_port = 'COM3';
+        end
         parameters.serial.control_baud_rate = '115200';
-        parameters.serial.data_port = 'COM3';
         parameters.serial.data_baud_rate = '230400';
     end
     function createInterface(  )
@@ -88,7 +93,7 @@ function lever_control_gui
         gui.behavior.btResume = uicontrol('Parent',behaviorButtonGrid,'Enable','off','String','Resume','Callback',@bt_Callback);
         gui.behavior.btWater50 = uicontrol('Parent',behaviorButtonGrid,'Enable','off','String','Water 0.05','Callback',@bt_Callback);
         gui.behavior.btWaterOff = uicontrol('Parent',behaviorButtonGrid,'Enable','off','String','Water Off','Callback',@bt_Callback);
-        gui.behavior.btLeverReset = uicontrol('Parent',behaviorButtonGrid,'Enable','off','String','Lever reset','Callback',@bt_Callback);
+        gui.behavior.btLeverReinit = uicontrol('Parent',behaviorButtonGrid,'Enable','off','String','Lever reinit','Callback',@bt_Callback);
         
         gui.serial.btConnect = uicontrol('Parent',serialButtonGrid,'String','Connect','Callback',@bt_Callback);
         gui.serial.btDisconnect = uicontrol('Parent',serialButtonGrid,'Enable','off','String','Disconnect','Callback',@bt_Callback);
@@ -101,7 +106,6 @@ function lever_control_gui
         p = gui.ViewPanel;
         gui.ViewAxes = axes( 'Parent', p );
         
-        
     end % createInterface
     function bt_Callback(h,~)
         switch(h)
@@ -112,32 +116,52 @@ function lever_control_gui
             case gui.btLoadLatest
                 disp('load_y');
             
-                
+            
             case gui.behavior.btStart
+                [~,params] = propertiesGUI(gui.propertiesGUI);
+                cmd=sprintf('python ../python/bgPID.py python ../python/serialToFile.py %s -s %s -b %s',...
+                    [params.mouse.name '_' datestr(now,'yyyy-mm-dd-HH-MM-SS') '.dat'],...
+                    params.serial.control_port,params.serial.control_baud_rate);
+                [~,gui.pid]=system(cmd);
+                
+                fprintf(gui.serial_control,'start');
                 
                 lockDuringRun(true);
             case gui.behavior.btStop
+                fprintf(gui.serial_control,'pause');
+                
+                cmd=sprintf('python ../python/sendSIGINT.py %s',gui.pid);
+                system(cmd);
                 
                 lockDuringRun(false);
-                
+            case gui.behavior.btResume
+                fprintf(gui.serial_control,'resume');
+            case gui.behavior.btPause
+                fprintf(gui.serial_control,'pause');
+            case gui.behavior.btWater100
+                fprintf(gui.serial_control,'water 100');
+            case gui.behavior.btWater50
+                fprintf(gui.serial_control,'water 50');
+            case gui.behavior.btWaterOn
+                fprintf(gui.serial_control,'water on');
+            case gui.behavior.btWaterOff
+                fprintf(gui.serial_control,'water off');
+            case gui.behavior.btLeverOff
+                fprintf(gui.serial_control,'lever off');
+            case gui.behavior.btLeverReinit
+                fprintf(gui.serial_control,'lever reinit');
             case gui.serial.btConnect
                 closeSerials();
                 try
                     [~,params] = propertiesGUI(gui.propertiesGUI);
                     
-                    
-%                     gui.serial_control=serial(params.serial.control_port,...
-%                         'BaudRate',str2double(params.serial.control_baud_rate{params.serial.control_baud_rate{end}{1}}),...
-%                         'Terminator','CR/LF','DataTerminalReady','off','RequestToSend','off');
-%                     fopen(gui.serial_control);
-%                     fprintf(gui.serial_control,'\r\fsleep\r\f');
-%                     gui.serial_control.BytesAvailableFcn = @serialControlCallback;
-                    
-                    gui.serial_data=serial(params.serial.data_port,...
-                        'BaudRate',str2double(params.serial.data_baud_rate{params.serial.data_baud_rate{end}{1}}),...
-                        'BytesAvailableFcnMode','byte','DataTerminalReady','off','RequestToSend','off');
-                    gui.serial_data.BytesAvailableFcn = @serialDataCallback;
-                    fopen(gui.serial_data);
+                    gui.serial_control=serial(params.serial.control_port,...
+                        'BaudRate',str2double(params.serial.control_baud_rate),...
+                        'Terminator','LF','DataTerminalReady','off','RequestToSend','off');
+                    fopen(gui.serial_control);
+                    gui.serial_control.BytesAvailableFcn = @serialControlCallback;
+                    pause(1);
+                    fprintf(gui.serial_control,'pause');
                 catch e
                     closeSerials();
                     rethrow(e);
@@ -180,8 +204,16 @@ function lever_control_gui
         end
         if(toLock)
             set(gui.serial.btDisconnect,'Enable','off');
+            set(gui.behavior.btStart,'Enable','off');
+            set(gui.behavior.btStop,'Enable','on');
+            set(gui.behavior.btPause,'Enable','on');
+            set(gui.behavior.btResume,'Enable','on');
         else
             set(gui.serial.btDisconnect,'Enable','on');
+            set(gui.behavior.btStart,'Enable','on');
+            set(gui.behavior.btStop,'Enable','off');
+            set(gui.behavior.btPause,'Enable','off');
+            set(gui.behavior.btResume,'Enable','off');
         end
     end
     function enableButtonsAfterConnect(toEnable)
@@ -196,6 +228,9 @@ function lever_control_gui
         if(toEnable)
             set(gui.serial.btDisconnect,'Enable','on');
             set(gui.serial.btConnect,'Enable','off');
+            set(gui.behavior.btStop,'Enable','off');
+            set(gui.behavior.btPause,'Enable','off');
+            set(gui.behavior.btResume,'Enable','off');
         else
             set(gui.serial.btDisconnect,'Enable','off');
             set(gui.serial.btConnect,'Enable','on');
@@ -204,19 +239,12 @@ function lever_control_gui
     function serialControlCallback(h,e)
         try
             txt=fscanf(gui.serial_control);
-            fprintf(txt);
+            fprintf('%s',txt);
         catch e
             disp(e);
         end
     end
-    function serialDataCallback(h,e)
-        try
-            bytes=fread(gui.serial_data);
-            disp(length(bytes));
-        catch e
-            disp(e);
-        end
-    end
+
     function my_closereq(~,~)
     % Close request function 
     % to display a question dialog box 
