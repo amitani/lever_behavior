@@ -76,10 +76,10 @@ function lever_control_gui
         % + Create the controls
         ParametersPanel = uipanel('Parent',parametersPanel,'BorderType','none');
         gui.propertiesGUI = propertiesGUI(ParametersPanel, getInitialParameters());
-        % setappdata(gui.Window, 'propUpdateCallback',@propUpdateCallback);
+        setappdata(gui.Window, 'propUpdateCallback',@propUpdateCallback);
         
         gui.btLoad = uicontrol('Parent',mouseButtonGrid,'String','Load','Callback',@bt_Callback);
-        gui.btSave = uicontrol('Parent',mouseButtonGrid,'String','Save','Callback',@bt_Callback);
+        gui.btUpdate = uicontrol('Parent',mouseButtonGrid,'String','Update','Callback',@bt_Callback);
         gui.btLoadLatest = uicontrol('Parent',mouseButtonGrid,'String','Load Latest','Callback',@bt_Callback);
         gui.btSaveAs = uicontrol('Parent',mouseButtonGrid,'String','Save as','Callback',@bt_Callback);
         
@@ -97,35 +97,75 @@ function lever_control_gui
         
         gui.serial.btConnect = uicontrol('Parent',serialButtonGrid,'String','Connect','Callback',@bt_Callback);
         gui.serial.btDisconnect = uicontrol('Parent',serialButtonGrid,'Enable','off','String','Disconnect','Callback',@bt_Callback);
+        gui.connected=false;
         
         set(mouseButtonGrid,'ColumnSizes',[-1 -1]);
         set(behaviorButtonGrid,'ColumnSizes',[-1 -1]); 
         set(serialButtonGrid,'ColumnSizes',[-1 -1]);
+        
+        
+        lockDuringRun(false)
+        enableButtonsAfterConnect(false)
         
         % + Create the view
         p = gui.ViewPanel;
         gui.ViewAxes = axes( 'Parent', p );
         
     end % createInterface
+    function propUpdateCallback(propName,propValue) %propName, propValue
+        disp([propName ': ' propValue]);
+    end
+    function pathname = defaultPathName()
+        pathname=fullfile(fileparts(fileparts(mfilename('fullpath'))),'data');
+        if(~exist(pathname,'dir'))
+            mkdir(pathname);
+        end
+    end
+    function filename = defaultParamsFileName()
+        [~,params] = propertiesGUI(gui.propertiesGUI);
+        filename=fullfile(defaultPathName(),[params.mouse.name '-' datestr(now,'yyyy_mm_dd-HH_MM_SS') '.mat']);
+    end
+    function filename = defaultDataFileName()
+        [~,params] = propertiesGUI(gui.propertiesGUI);
+        filename=fullfile(defaultPathName(),[params.mouse.name '-' datestr(now,'yyyy_mm_dd-HH_MM_SS') '.dat']);
+    end
     function bt_Callback(h,~)
         switch(h)
             case gui.btLoad
-                disp('load');
-            case gui.btSave
-                disp('save');
+                [filename, pathname] = uigetfile('*.mat','Select setting file',defaultPathName());
+                if(~isequal(filename,0))
+                    propertiesGUI(gui.propertiesGUI, 'load', fullfile(filename,pathname), '');
+                end
+            case gui.btUpdate
+                assert(gui.connected)
+                [~,params] = propertiesGUI(gui.propertiesGUI);
+                cmd=sprintf('set %d %d %d %d %d %d %d %d'...
+                ,params.behavior.iti...
+                ,params.behavior.response...
+                ,params.behavior.nfb_delay...
+                ,params.behavior.nfb_window...
+                ,params.behavior.water_hit...
+                ,params.behavior.water_nfb_on...
+                ,params.behavior.water_nfb_off...
+                ,params.behavior.motor_steps);
+                fprintf(gui.serial_control,cmd);
+                propertiesGUI(gui.propertiesGUI, 'save', defaultParamsFileName(), '');
+            case gui.btSaveAs
+                [filename, pathname] = uiputfile('*.mat','Save as',defaultParamsFileName());
+                if(~isequal(filename,0))
+                    propertiesGUI(gui.propertiesGUI, 'save', fullfile(filename,pathname), '');
+                end
             case gui.btLoadLatest
-                disp('load_y');
-            
+                warning('NOT IMPLEMENTED');
             
             case gui.behavior.btStart
                 [~,params] = propertiesGUI(gui.propertiesGUI);
                 cmd=sprintf('python ../python/bgPID.py python ../python/serialToFile.py %s -s %s -b %s',...
-                    [params.mouse.name '_' datestr(now,'yyyy-mm-dd-HH-MM-SS') '.dat'],...
+                    defaultDataFileName(),...
                     params.serial.control_port,params.serial.control_baud_rate);
                 [~,gui.pid]=system(cmd);
                 
                 fprintf(gui.serial_control,'start');
-                
                 lockDuringRun(true);
             case gui.behavior.btStop
                 fprintf(gui.serial_control,'pause');
@@ -208,12 +248,14 @@ function lever_control_gui
             set(gui.behavior.btStop,'Enable','on');
             set(gui.behavior.btPause,'Enable','on');
             set(gui.behavior.btResume,'Enable','on');
+            set(gui.btUpdate,'Enable','on');
         else
             set(gui.serial.btDisconnect,'Enable','on');
             set(gui.behavior.btStart,'Enable','on');
             set(gui.behavior.btStop,'Enable','off');
             set(gui.behavior.btPause,'Enable','off');
             set(gui.behavior.btResume,'Enable','off');
+            set(gui.btUpdate,'Enable','off');
         end
     end
     function enableButtonsAfterConnect(toEnable)
@@ -235,6 +277,7 @@ function lever_control_gui
             set(gui.serial.btDisconnect,'Enable','off');
             set(gui.serial.btConnect,'Enable','on');
         end
+        gui.connected=toEnable;
     end
     function serialControlCallback(h,e)
         try
@@ -244,12 +287,15 @@ function lever_control_gui
             disp(e);
         end
     end
-
+    function copyToServer()
+        
+    end
     function my_closereq(~,~)
     % Close request function 
     % to display a question dialog box 
             closeSerials();
-             delete(gcf)
+            copyToServer();
+            delete(gcf)
 %        selection = questdlg('Close?',...
 %           'Close Request Function',...
 %           'Yes','No','Yes'); 

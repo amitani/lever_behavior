@@ -172,7 +172,7 @@ void loop() {
       command=command+' ';
       for(int i=0;i<sizeof(new_params)/sizeof(unsigned long);i++){
         if(command.indexOf(' ')<0) break;
-        *(i+(unsigned long*)&new_params)=command.substring(0,command.indexOf(' ')).toInt()*1000;
+        *(i+(unsigned long*)&new_params)=long(command.substring(0,command.indexOf(' ')).toInt())*1000L;
         //SerialControl.print(*(i+(unsigned long*)&new_params)); SerialControl.print("\n");
         if(command.indexOf(' ')>=0)command.remove(0,1+command.indexOf(' '));
       }

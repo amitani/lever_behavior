@@ -1037,16 +1037,16 @@ function propUpdatedCallback(prop, eventData, propName, fileData)
     callbacks = getappdata(hFig, 'propUpdateCallback');
     if(isa(callbacks,'function_handle'))
         try
-            callbacks(prop,eventData);
+            callbacks(propName,propValue);
         catch e
-            warning(e);
+            disp(e);
         end
     else
         for i=1:length(callbacks)
             try
-                callbacks{i}(prop,eventData);
+                callbacks{i}(propName,propValue);
             catch e
-                warning(e);
+                disp(e);
             end
         end
     end
