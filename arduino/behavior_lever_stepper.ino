@@ -208,12 +208,33 @@ void loop() {
   lick.new_value(digitalRead(PIN_LICK));
   lever_position=analogRead(PIN_LEVER);
   
+  if(loop_count%100==-1){
+     SerialControl.print(hit.raw);
+     SerialControl.print("\t");
+     SerialControl.print(hit.current);
+     SerialControl.print("\t");
+     SerialControl.print(origin.raw);
+     SerialControl.print("\t");
+     SerialControl.print(origin.current);
+     SerialControl.print("\t");
+     SerialControl.print(stepper.currentPosition());
+     SerialControl.print("\t");
+     SerialControl.print(stepper.distanceToGo());
+     SerialControl.print("\n");
+  }
+  
   // state transitions
   prev_state=state;
   if(next_state!=state){
     state=next_state;
     state_start_us=current_loop_us;
   }
+  if(state!=prev_state){
+    SerialControl.print("State ");
+    SerialControl.print(state);
+    SerialControl.print("\n");
+  }
+  
   if(state==INIT){
     if(state!=prev_state){
       SerialControl.print("Initializing.\n");
@@ -222,9 +243,10 @@ void loop() {
       stepper.move(100);
     }
     if(hit&&origin||current_loop_us-state_start_us>init_timeout_us){
+      stepper.setCurrentPosition(0);
+      stepper.moveTo(0);
       SerialControl.print("Done.\n");
       stepper.setMaxSpeed(200.0);
-      stepper.setCurrentPosition(0);
       next_state=next_trial_state=state_after_init;
     }
   }else if(state==BITCODE){
