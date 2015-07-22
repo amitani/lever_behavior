@@ -18,8 +18,8 @@ function lever_control_gui
             parameters.serial.control_port = '/dev/tty.usbmodem1411';
             parameters.serial.data_port = '/dev/tty.usbserial';
         else
-            parameters.serial.control_port = 'COM5';
-            parameters.serial.data_port = 'COM3';
+            parameters.serial.control_port = 'COM4';
+            parameters.serial.data_port = 'COM5';
         end
         parameters.serial.control_baud_rate = '115200';
         parameters.serial.data_baud_rate = '230400';
@@ -282,10 +282,25 @@ function lever_control_gui
     function serialControlCallback(h,e)
         try
             txt=fscanf(gui.serial_control);
-            fprintf('%s',txt);
+            if(isempty(txt)), return, end
+            switch(txt(1))
+                case '>'
+                    fprintf('%s',txt);
+                case '*'
+                    trial=regexp(txt(2:end),'(?<trial_num>\d+):\s*(?<state>\w*)','names','once');
+                    if(isempty(trial)),return,end
+                    gui.trial_history(end+1)=trial;
+                    updatePlot();
+                otherwise
+                    disp('error: ');
+                    fprintf('%s',txt);
+            end
         catch e
             disp(e);
         end
+    end
+    function updatePlot()
+        
     end
     function copyToServer()
         
