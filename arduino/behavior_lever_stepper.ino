@@ -170,12 +170,14 @@ void loop() {
     }else if(command.startsWith("set ")){
       command.remove(0,1+command.indexOf(' '));
       command=command+' ';
-      for(int i=0;i<sizeof(new_params)/sizeof(unsigned long);i++){
+      for(int i=0;i<7;i++){
         if(command.indexOf(' ')<0) break;
         *(i+(unsigned long*)&new_params)=long(command.substring(0,command.indexOf(' ')).toInt())*1000L;
         //SerialControl.print(*(i+(unsigned long*)&new_params)); SerialControl.print("\n");
         if(command.indexOf(' ')>=0)command.remove(0,1+command.indexOf(' '));
       }
+      if(command.indexOf(' ')<0) break;
+      *(unsigned int*)(7+(unsigned long*)&new_params)=command.substring(0,command.indexOf(' ')).toInt();
     }else if(command.startsWith("lever ")){
       command=command.substring(command.indexOf(' ')+1);
       if(command=="reinit"){
@@ -286,7 +288,7 @@ void loop() {
     if(hit){
       water_start_us=current_loop_us;
       water_duration_us=params.water_hit_us;
-      noTone(PIN_BEEP);tone(PIN_BEEP,10000,500);
+      noTone(PIN_BEEP);tone(PIN_BEEP,4000,500);
       hit_reward=true;
       next_state=NFB_DELAY;
     }
@@ -296,12 +298,12 @@ void loop() {
       if(params.water_nfb_on_us>0 && nfb){
         water_start_us=current_loop_us;
         water_duration_us=params.water_nfb_on_us;
-        noTone(PIN_BEEP);tone(PIN_BEEP,10000,500);
+        noTone(PIN_BEEP);tone(PIN_BEEP,4000,500);
       }
       if(params.water_nfb_off_us>0 && !nfb){
         water_start_us=current_loop_us;
         water_duration_us=params.water_nfb_off_us;
-        tone(PIN_BEEP,10000,500);
+        tone(PIN_BEEP,4000,500);
       }
       next_state=RESET;
     }
@@ -312,7 +314,7 @@ void loop() {
     }
     if(stepper.distanceToGo()==0){
       next_state=next_trial_state;
-      sprintf(output,"%4d %s\n",trial_count,hit_reward?"h":"m");
+      sprintf(output,"*%4d %s\n",trial_count,hit_reward?"h":"m");
       SerialControl.print(output);
     }
   }else if(state==PAUSE){

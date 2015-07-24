@@ -1,5 +1,9 @@
 function lever_control_gui
     global gui;
+    if(~isempty(gui))
+        return;
+    end
+    addpath(fileparts(mfilename('fullpath')))
     createInterface();
     
     function parameters = getInitialParameters()
@@ -99,6 +103,9 @@ function lever_control_gui
         gui.serial.btDisconnect = uicontrol('Parent',serialButtonGrid,'Enable','off','String','Disconnect','Callback',@bt_Callback);
         gui.connected=false;
         
+        gui.trial_history=[];
+        gui.last_set_cmd='';
+        
         set(mouseButtonGrid,'ColumnSizes',[-1 -1]);
         set(behaviorButtonGrid,'ColumnSizes',[-1 -1]); 
         set(serialButtonGrid,'ColumnSizes',[-1 -1]);
@@ -114,6 +121,9 @@ function lever_control_gui
     end % createInterface
     function propUpdateCallback(propName,propValue) %propName, propValue
         disp([propName ': ' propValue]);
+        if(gui.connected)
+            updateParameters();
+        end
     end
     function pathname = defaultPathName()
         pathname=fullfile(fileparts(fileparts(mfilename('fullpath'))),'data');
@@ -129,6 +139,23 @@ function lever_control_gui
         [~,params] = propertiesGUI(gui.propertiesGUI);
         filename=fullfile(defaultPathName(),[params.mouse.name '-' datestr(now,'yyyy_mm_dd-HH_MM_SS') '.dat']);
     end
+    function updateParameters()
+        [~,params] = propertiesGUI(gui.propertiesGUI);
+        cmd=sprintf('set %d %d %d %d %d %d %d %d'...
+        ,1000*params.behavior.iti...
+        ,1000*params.behavior.response...
+        ,1000*params.behavior.nfb_delay...
+        ,1000*params.behavior.nfb_window...
+        ,1000*params.behavior.water_hit...
+        ,1000*params.behavior.water_nfb_on...
+        ,1000*params.behavior.water_nfb_off...
+        ,params.behavior.motor_steps);
+        if(~strcmp(gui.last_set_cmd,cmd))
+            fprintf(gui.serial_control,cmd);
+            propertiesGUI(gui.propertiesGUI, 'save', defaultParamsFileName(), '');
+        end
+        gui.last_set_cmd=cmd;
+    end
     function bt_Callback(h,~)
         switch(h)
             case gui.btLoad
@@ -138,22 +165,11 @@ function lever_control_gui
                 end
             case gui.btUpdate
                 assert(gui.connected)
-                [~,params] = propertiesGUI(gui.propertiesGUI);
-                cmd=sprintf('set %d %d %d %d %d %d %d %d'...
-                ,params.behavior.iti...
-                ,params.behavior.response...
-                ,params.behavior.nfb_delay...
-                ,params.behavior.nfb_window...
-                ,params.behavior.water_hit...
-                ,params.behavior.water_nfb_on...
-                ,params.behavior.water_nfb_off...
-                ,params.behavior.motor_steps);
-                fprintf(gui.serial_control,cmd);
-                propertiesGUI(gui.propertiesGUI, 'save', defaultParamsFileName(), '');
+                updateParameters()
             case gui.btSaveAs
                 [filename, pathname] = uiputfile('*.mat','Save as',defaultParamsFileName());
                 if(~isequal(filename,0))
-                    propertiesGUI(gui.propertiesGUI, 'save', fullfile(filename,pathname), '');
+                    propertiesGUI(gui.propertiesGUI, 'save', fullfile(pathname,filename), '');
                 end
             case gui.btLoadLatest
                 warning('NOT IMPLEMENTED');
@@ -162,11 +178,12 @@ function lever_control_gui
                 [~,params] = propertiesGUI(gui.propertiesGUI);
                 cmd=sprintf('python ../python/bgPID.py python ../python/serialToFile.py %s -s %s -b %s',...
                     defaultDataFileName(),...
-                    params.serial.control_port,params.serial.control_baud_rate);
+                    params.serial.data_port,params.serial.data_baud_rate);
                 [~,gui.pid]=system(cmd);
-                
+                updateParameters();
                 fprintf(gui.serial_control,'start');
                 lockDuringRun(true);
+                gui.trial_history=[];
             case gui.behavior.btStop
                 fprintf(gui.serial_control,'pause');
                 
@@ -201,6 +218,7 @@ function lever_control_gui
                     fopen(gui.serial_control);
                     gui.serial_control.BytesAvailableFcn = @serialControlCallback;
                     pause(1);
+                    fprintf(gui.serial_control,'');
                     fprintf(gui.serial_control,'pause');
                 catch e
                     closeSerials();
@@ -287,20 +305,29 @@ function lever_control_gui
                 case '>'
                     fprintf('%s',txt);
                 case '*'
-                    trial=regexp(txt(2:end),'(?<trial_num>\d+):\s*(?<state>\w*)','names','once');
+                    trial=regexp(txt(2:end),'(?<trial_num>\d+)\s*(?<state>\w*)','names','once');
                     if(isempty(trial)),return,end
-                    gui.trial_history(end+1)=trial;
+                    if(~isempty(gui.trial_history))
+                        gui.trial_history(end+1)=trial;
+                    else
+                        gui.trial_history=trial;
+                    end
                     updatePlot();
+                case 'S'
+                    %fprintf('%s',txt);
                 otherwise
-                    disp('error: ');
-                    fprintf('%s',txt);
+                    fprintf('error: %s',txt);
             end
         catch e
             disp(e);
         end
     end
     function updatePlot()
-        
+        [s,~,I]=unique({gui.trial_history.state});
+        for i=1:length(s)
+            fprintf('\t%s: %d',s{i},sum(I==i));
+        end
+        fprintf('\n');
     end
     function copyToServer()
         
@@ -308,17 +335,18 @@ function lever_control_gui
     function my_closereq(~,~)
     % Close request function 
     % to display a question dialog box 
-            closeSerials();
-            copyToServer();
-            delete(gcf)
-%        selection = questdlg('Close?',...
-%           'Close Request Function',...
-%           'Yes','No','Yes'); 
-%        switch selection, 
-%           case 'Yes',
-%              delete(gcf)
-%           case 'No'
-%           return 
-%        end
+        closeSerials();
+        copyToServer();
+        delete(gcf)
+        gui=[];
+        selection = questdlg('Close?',...
+           'Close Request Function',...
+           'Yes','No','Yes'); 
+        switch selection, 
+           case 'Yes',
+              delete(gcf)
+           case 'No'
+           return 
+        end
     end
 end
