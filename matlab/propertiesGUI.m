@@ -181,6 +181,7 @@ function [hPropsPane,parameters, propsList] = propertiesGUI(hParent, parameters,
       end
       mode = parameters;
       if ischar(mode) && ischar(filename) && (ischar(selectedBranch) || iscell(selectedBranch))
+          hPropsPane=hParent;
           hParent = handle(hParent);
           hFig = ancestor(hParent,'figure');
           mirrorData = getappdata(hFig, 'mirror');

@@ -10,13 +10,15 @@ function lever_control_gui
         parameters.mouse.name='AM0000';
         
         parameters.behavior.iti=4;
+        parameters.behavior.iti_var=1;
         parameters.behavior.response=10;
-        parameters.behavior.nfb_delay=0.7;
+        parameters.behavior.nfb_delay=0.5;
         parameters.behavior.nfb_window=1;
         parameters.behavior.water_hit=0.1;
         parameters.behavior.water_nfb_on=0;
         parameters.behavior.water_nfb_off=0;
         parameters.behavior.motor_steps=uint8(5);
+        parameters.behavior.nfb_flip=0;
         
         if(isunix())
             parameters.serial.control_port = '/dev/tty.usbmodem1411';
@@ -141,27 +143,29 @@ function lever_control_gui
     end
     function updateParameters()
         [~,params] = propertiesGUI(gui.propertiesGUI);
-        cmd=sprintf('set %d %d %d %d %d %d %d %d'...
+        cmd=sprintf('set %d %d %d %d %d %d %d %d %d %f'...
         ,1000*params.behavior.iti...
+        ,1000*params.behavior.iti_var...
         ,1000*params.behavior.response...
         ,1000*params.behavior.nfb_delay...
         ,1000*params.behavior.nfb_window...
         ,1000*params.behavior.water_hit...
         ,1000*params.behavior.water_nfb_on...
         ,1000*params.behavior.water_nfb_off...
-        ,params.behavior.motor_steps);
+        ,params.behavior.motor_steps...
+        ,params.behavior.nfb_flip);
+        fprintf(gui.serial_control,cmd);
         if(~strcmp(gui.last_set_cmd,cmd))
-            fprintf(gui.serial_control,cmd);
             propertiesGUI(gui.propertiesGUI, 'save', defaultParamsFileName(), '');
+            gui.last_set_cmd=cmd;
         end
-        gui.last_set_cmd=cmd;
     end
     function bt_Callback(h,~)
         switch(h)
             case gui.btLoad
                 [filename, pathname] = uigetfile('*.mat','Select setting file',defaultPathName());
                 if(~isequal(filename,0))
-                    propertiesGUI(gui.propertiesGUI, 'load', fullfile(filename,pathname), '');
+                    gui.propertiesGUI=propertiesGUI(gui.propertiesGUI, 'load', fullfile(pathname,filename), '');
                 end
             case gui.btUpdate
                 assert(gui.connected)
@@ -169,25 +173,47 @@ function lever_control_gui
             case gui.btSaveAs
                 [filename, pathname] = uiputfile('*.mat','Save as',defaultParamsFileName());
                 if(~isequal(filename,0))
-                    propertiesGUI(gui.propertiesGUI, 'save', fullfile(pathname,filename), '');
+                    gui.propertiesGUI=propertiesGUI(gui.propertiesGUI, 'save', fullfile(pathname,filename), '');
                 end
             case gui.btLoadLatest
                 warning('NOT IMPLEMENTED');
             
             case gui.behavior.btStart
                 [~,params] = propertiesGUI(gui.propertiesGUI);
-                cmd=sprintf('python ../python/bgPID.py python ../python/serialToFile.py %s -s %s -b %s',...
-                    defaultDataFileName(),...
+                
+                dataFileName=defaultDataFileName();
+                disp(dataFileName);
+                if(~isempty(dir(dataFileName)))
+                    error('Data file already exists. Try again.');
+                end
+                
+                cmd=sprintf('python "%s\\python\\bgPID.py" python "%s\\python\\serialToFile.py" "%s" -s %s -b %s',...
+                    fileparts(fileparts(mfilename('fullpath'))),...
+                    fileparts(fileparts(mfilename('fullpath'))),...
+                    dataFileName,...
                     params.serial.data_port,params.serial.data_baud_rate);
+                disp(cmd);
                 [~,gui.pid]=system(cmd);
+                
+                pause(2);
+                fdata=dir(dataFileName);
+                if(isempty(fdata)||fdata.bytes==0)
+                    cmd=sprintf('python "%s\\python\\sendSIGINT.py" %s',...
+                        fileparts(fileparts(mfilename('fullpath'))),gui.pid);
+                    system(cmd);
+                    error('Data is not saved');
+                end
+                
                 updateParameters();
+                pause(0.5);
                 fprintf(gui.serial_control,'start');
                 lockDuringRun(true);
                 gui.trial_history=[];
             case gui.behavior.btStop
                 fprintf(gui.serial_control,'pause');
                 
-                cmd=sprintf('python ../python/sendSIGINT.py %s',gui.pid);
+                cmd=sprintf('python "%s\\python\\sendSIGINT.py" %s',...
+                    fileparts(fileparts(mfilename('fullpath'))),gui.pid);
                 system(cmd);
                 
                 lockDuringRun(false);
@@ -305,6 +331,7 @@ function lever_control_gui
                 case '>'
                     fprintf('%s',txt);
                 case '*'
+                    disp(txt(2:end));
                     trial=regexp(txt(2:end),'(?<trial_num>\d+)\s*(?<state>\w*)','names','once');
                     if(isempty(trial)),return,end
                     if(~isempty(gui.trial_history))
@@ -314,7 +341,7 @@ function lever_control_gui
                     end
                     updatePlot();
                 case 'S'
-                    %fprintf('%s',txt);
+                    fprintf('%s',txt);
                 otherwise
                     fprintf('error: %s',txt);
             end

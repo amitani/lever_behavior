@@ -44,6 +44,7 @@ unsigned int nbits=12;
 
 struct Params{
   unsigned long iti_us;
+  unsigned long iti_var_us;
   unsigned long response_us;
   unsigned long nfb_delay_us;  
   unsigned long nfb_window;
@@ -53,8 +54,13 @@ struct Params{
   unsigned long water_nfb_off_us;
   
   unsigned int open_steps;
-}params={4000UL*1000,10000UL*1000,700UL*1000,1000UL*1000,100UL*1000,0,0, 5},new_params=params;
+
+  float nfb_flip_prob;
+}params={4000UL*1000,0UL*1000,10000UL*1000,700UL*1000,1000UL*1000,100UL*1000,0,0,5,0},new_params=params;
+const int N_PARAMS=8; // number of unsigned long parameters
 // set 4000 300 10000 500 1000 1000 100 0 0 50
+
+unsigned long current_iti=0;
 
 unsigned long water_start_us=0;
 unsigned long water_duration_us=0;
@@ -88,6 +94,7 @@ unsigned int lever_position;
 
 unsigned int trial_count;
 bool hit_reward;  
+bool nfb_on,nfb_flip,nfb_on_reward,nfb_off_reward;
 
 bool to_reset=true;
 
@@ -141,6 +148,8 @@ void setup() {
   command.reserve(128);
   
   current_loop_us = micros();
+
+  randomSeed(analogRead(15));
 }
 void loop() {
   stepper.run();
@@ -170,14 +179,19 @@ void loop() {
     }else if(command.startsWith("set ")){
       command.remove(0,1+command.indexOf(' '));
       command=command+' ';
-      for(int i=0;i<7;i++){
+      for(int i=0;i<N_PARAMS;i++){
         if(command.indexOf(' ')<0) break;
         *(i+(unsigned long*)&new_params)=long(command.substring(0,command.indexOf(' ')).toInt())*1000L;
         //SerialControl.print(*(i+(unsigned long*)&new_params)); SerialControl.print("\n");
         if(command.indexOf(' ')>=0)command.remove(0,1+command.indexOf(' '));
       }
       if(command.indexOf(' ')<0) break;
-      *(unsigned int*)(7+(unsigned long*)&new_params)=command.substring(0,command.indexOf(' ')).toInt();
+      *(unsigned int*)(N_PARAMS*sizeof(long)+(char*)&new_params)=command.substring(0,command.indexOf(' ')).toInt();
+      if(command.indexOf(' ')>=0)command.remove(0,1+command.indexOf(' '));
+      
+      if(command.indexOf(' ')<0) break;
+      *(float*)(N_PARAMS*sizeof(long)+sizeof(int)+(char*)&new_params)=command.substring(0,command.indexOf(' ')).toFloat();
+      if(command.indexOf(' ')>=0)command.remove(0,1+command.indexOf(' '));
     }else if(command.startsWith("lever ")){
       command=command.substring(command.indexOf(' ')+1);
       if(command=="reinit"){
@@ -231,15 +245,15 @@ void loop() {
     state=next_state;
     state_start_us=current_loop_us;
   }
-  if(state!=prev_state){
+  /*if(state!=prev_state){
     SerialControl.print("State ");
     SerialControl.print(state);
     SerialControl.print("\n");
-  }
+  }*/
   
   if(state==INIT){
     if(state!=prev_state){
-      SerialControl.print("Initializing.\n");
+      SerialControl.print(">Initializing.\n");
       digitalWrite(PIN_STEPPER_ENABLE,HIGH);pin_stepper_enable_status=true;
       stepper.setMaxSpeed(20.0);
       stepper.move(100);
@@ -247,7 +261,7 @@ void loop() {
     if(hit&&origin||current_loop_us-state_start_us>init_timeout_us){
       stepper.setCurrentPosition(0);
       stepper.moveTo(0);
-      SerialControl.print("Done.\n");
+      SerialControl.print(">Done.\n");
       stepper.setMaxSpeed(200.0);
       next_state=next_trial_state=state_after_init;
     }
@@ -268,15 +282,18 @@ void loop() {
       if(memcmp(&params, &new_params, sizeof(params))!=0){
         params=new_params;
         nfb.off_delay_us=params.nfb_window;
-        SerialControl.print("Updated parameters.\n");
+        SerialControl.print(">Updated parameters.\n");
       }
+      current_iti = params.iti_us + random(params.iti_var_us);
+      //SerialControl.print("CURRENT ITI: ");
+      //SerialControl.println(current_iti);
     }
     int nth_bit=(current_loop_us-state_start_us)/us_per_bitcode;
     if(nth_bit==0) bitcode=true;
     else if(nth_bit<=nbits) bitcode=trial_count&1<<(nbits-nth_bit);
     else {bitcode=false;next_state=ITI;}
   }else if(state==ITI){
-    if(current_loop_us-state_start_us>params.iti_us){next_state=MOVE;}
+    if(current_loop_us-state_start_us>current_iti){next_state=MOVE;}
   }else if(state==MOVE){
     if(state!=prev_state){
       stepper.setMaxSpeed(200.0);
@@ -292,18 +309,23 @@ void loop() {
       hit_reward=true;
       next_state=NFB_DELAY;
     }
-    if(current_loop_us-state_start_us>params.response_us){noTone(PIN_BEEP);next_state=RESET;}
+    if(current_loop_us-state_start_us>params.response_us){noTone(PIN_BEEP);hit_reward=false;next_state=RESET;}
   }else if(state==NFB_DELAY){
     if(current_loop_us-state_start_us>params.nfb_delay_us){
-      if(params.water_nfb_on_us>0 && nfb){
+      nfb_flip=(random(65536)<65536*params.nfb_flip_prob);
+      nfb_on=nfb;
+      nfb_on_reward=nfb_off_reward=false;
+      if(params.water_nfb_on_us>0 && nfb_on^nfb_flip){
         water_start_us=current_loop_us;
         water_duration_us=params.water_nfb_on_us;
         noTone(PIN_BEEP);tone(PIN_BEEP,4000,500);
+        nfb_on_reward=true;
       }
-      if(params.water_nfb_off_us>0 && !nfb){
+      if(params.water_nfb_off_us>0 && !nfb_on^nfb_flip){
         water_start_us=current_loop_us;
         water_duration_us=params.water_nfb_off_us;
-        tone(PIN_BEEP,4000,500);
+        noTone(PIN_BEEP);tone(PIN_BEEP,4000,500);
+        nfb_off_reward=true;
       }
       next_state=RESET;
     }
@@ -314,7 +336,8 @@ void loop() {
     }
     if(stepper.distanceToGo()==0){
       next_state=next_trial_state;
-      sprintf(output,"*%4d %s\n",trial_count,hit_reward?"h":"m");
+      sprintf(output,"*%4d %s %s %s %s %s %s\n",trial_count,hit_reward?nfb_on_reward|nfb_off_reward?"H":"h":"m",
+          nfb_on?"t":"f",nfb_flip?"t":"f",nfb_on^nfb_flip?"t":"f",nfb_on_reward?"t":"f",nfb_off_reward?"t":"f");
       SerialControl.print(output);
     }
   }else if(state==PAUSE){
